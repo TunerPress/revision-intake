@@ -4,6 +4,7 @@ import { createRevisionSubtask } from '@/lib/subtask';
 import { createCsTasks } from '@/lib/cs';
 import { insertSubmission, updateSubmission } from '@/lib/db';
 import { attachFiles } from '@/lib/files';
+import { waitUntil } from '@vercel/functions';
 
 export async function POST(request) {
   let payload;
@@ -43,36 +44,47 @@ export async function POST(request) {
     return Response.json({ ok: false, error: 'save_failed', detail: e.message }, { status: 500 });
   }
 
-  const reply = { ok: true, id: saved.id, matched: !!match?.ok, parsed: null };
+  const reply = {
+    ok: true,
+    id: saved.id,
+    matched: !!match?.ok,
+    task: match?.ok ? { name: match.task.name, project: match.task.project } : null,
+  };
 
-  try {
-    const parsed = await parseRevision(rawText);
-    reply.parsed = parsed;
-    await updateSubmission(saved.id, { parsed_json: parsed, status: 'parsed' });
+ waitUntil(
+    (async () => {
+      try {
+        const parsed = await parseRevision(rawText);
+        await updateSubmission(saved.id, { parsed_json: parsed, status: 'parsed' });
 
-    if (match?.ok) {
-      const sub = await createRevisionSubtask(match.task.gid, parsed);
-      await markNeedsRevision(match.task.gid, match.task.project);
-      await updateSubmission(saved.id, { asana_subtask_gid: sub.gid, status: 'posted' });
-      if (payload.files?.length) await attachFiles(saved.id, sub.gid, payload.files);
-      reply.task = { name: match.task.name, project: match.task.project };
-    }
-    const cs = await createCsTasks({
-      ref: match?.ref,
-      rawRef,
-      parsed,
-      matched: !!match?.ok,
-      completed: match?.ok ? match.completed : false,
-      taskName: match?.ok ? match.task.name : null,
-      project: match?.ok ? match.task.project : null,
-      rawText,
-      email: (payload.email || '').trim(),
-      customerName: (payload.name || '').trim(),
-    });
-    if (cs.length) await updateSubmission(saved.id, { cs_task_gid: cs[0] });
-  } catch (e) {
-    await updateSubmission(saved.id, { status: 'failed', error_text: String(e.message).slice(0, 500) });
-  }
+        if (match?.ok) {
+          const sub = await createRevisionSubtask(match.task.gid, parsed);
+          await markNeedsRevision(match.task.gid, match.task.project);
+          await updateSubmission(saved.id, { asana_subtask_gid: sub.gid, status: 'posted' });
+          if (payload.files?.length) await attachFiles(saved.id, sub.gid, payload.files);
+        }
 
-  return reply.ok ? Response.json(reply) : Response.json(reply, { status: 500 });
-}
+        const cs = await createCsTasks({
+          ref: match?.ref,
+          rawRef,
+          parsed,
+          matched: !!match?.ok,
+          completed: match?.ok ? match.completed : false,
+          taskName: match?.ok ? match.task.name : null,
+          project: match?.ok ? match.task.project : null,
+          rawText,
+          email: (payload.email || '').trim(),
+          customerName: (payload.name || '').trim(),
+        });
+        if (cs.length) await updateSubmission(saved.id, { cs_task_gid: cs[0] });
+      } catch (e) {
+        await updateSubmission(saved.id, {
+          status: 'failed',
+          error_text: String(e.message).slice(0, 500),
+        });
+      }
+    })()
+  );
+
+  return Response.json(reply);
+} 
