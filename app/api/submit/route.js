@@ -3,6 +3,7 @@ import { parseRevision } from '@/lib/agent';
 import { createRevisionSubtask } from '@/lib/subtask';
 import { createCsTasks } from '@/lib/cs';
 import { insertSubmission, updateSubmission } from '@/lib/db';
+import { attachFiles } from '@/lib/files';
 
 export async function POST(request) {
   let payload;
@@ -53,6 +54,7 @@ export async function POST(request) {
       const sub = await createRevisionSubtask(match.task.gid, parsed);
       await markNeedsRevision(match.task.gid, match.task.project);
       await updateSubmission(saved.id, { asana_subtask_gid: sub.gid, status: 'posted' });
+      if (payload.files?.length) await attachFiles(saved.id, sub.gid, payload.files);
       reply.task = { name: match.task.name, project: match.task.project };
     }
     const cs = await createCsTasks({
